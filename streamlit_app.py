@@ -1,53 +1,45 @@
-# robot_interface.py
 import streamlit as st
 import subprocess
 import os
 import time
 import threading
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# Path to your client executable - update this to match your setup
-CLIENT_EXECUTABLE = "/path/to/your/client_executable"
+# Path to your client executable
+CLIENT_EXECUTABLE = "/home/rapid/ssl_project_c/src/client_robot"
 SERVER_IP_DEFAULT = "192.168.1.100"  # Default server IP
 
-# Initialize session state
-if 'executing' not in st.session_state:
-    st.session_state.executing = False
-if 'status_message' not in st.session_state:
-    st.session_state.status_message = ""
-if 'command_history' not in st.session_state:
-    st.session_state.command_history = []
+def initialize_session_state():
+    """Initialize all session state variables"""
+    if 'executing' not in st.session_state:
+        st.session_state.executing = False
+    if 'status_message' not in st.session_state:
+        st.session_state.status_message = ""
+    if 'command_history' not in st.session_state:
+        st.session_state.command_history = []
+    if 'server_ip' not in st.session_state:
+        st.session_state.server_ip = SERVER_IP_DEFAULT
 
 def execute_client_command(command):
     """Execute the client with specific command"""
-    # Make sure the client isn't already running
     if st.session_state.executing:
         st.warning("A command is already being executed. Please wait.")
         return
     
     st.session_state.executing = True
+    st.session_state.status_message = f"Executing: {command}"
     
     try:
-        # Create a temporary script that will run your client code with the command
-        script_path = "/tmp/robot_command.sh"
-        with open(script_path, "w") as f:
-            f.write(f"""#!/bin/bash
-# This script executes a single robot command
-export COMMAND="{command}"
-cd {os.path.dirname(CLIENT_EXECUTABLE)}
-{CLIENT_EXECUTABLE} {st.session_state.server_ip}
-""")
-        
-        # Make the script executable
-        os.chmod(script_path, 0o755)
-        
-        # Execute the command and capture output
-        st.session_state.status_message = f"Executing: {command}"
+        # Set the command as an environment variable and execute the client
+        env = os.environ.copy()
+        env["COMMAND"] = command
         
         process = subprocess.Popen(
-            script_path, 
-            stdout=subprocess.PIPE, 
+            [CLIENT_EXECUTABLE, st.session_state.server_ip],
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            env=env
         )
         
         stdout, stderr = process.communicate()
@@ -57,14 +49,16 @@ cd {os.path.dirname(CLIENT_EXECUTABLE)}
             st.session_state.command_history.append({
                 "command": command,
                 "status": "Success",
-                "time": time.strftime("%H:%M:%S")
+                "time": time.strftime("%H:%M:%S"),
+                "output": stdout.strip()
             })
         else:
             st.session_state.status_message = f"Failed: {command}. Error: {stderr}"
             st.session_state.command_history.append({
                 "command": command,
                 "status": "Failed",
-                "time": time.strftime("%H:%M:%S")
+                "time": time.strftime("%H:%M:%S"),
+                "output": stderr.strip()
             })
         
     except Exception as e:
@@ -72,84 +66,85 @@ cd {os.path.dirname(CLIENT_EXECUTABLE)}
         st.session_state.command_history.append({
             "command": command,
             "status": "Error",
-            "time": time.strftime("%H:%M:%S")
+            "time": time.strftime("%H:%M:%S"),
+            "output": str(e)
         })
     
     finally:
         st.session_state.executing = False
+        st.rerun()
 
-# Streamlit UI
 def main():
     st.set_page_config(page_title="Robot Arm Control", layout="wide")
+    initialize_session_state()
     
-    # Title and description
     st.title("Robot Arm Control System")
     st.subheader("Control interface for your secure robotic arm")
     
-    # Server IP configuration
-    if 'server_ip' not in st.session_state:
-        st.session_state.server_ip = SERVER_IP_DEFAULT
-    
+    # Server configuration
     st.sidebar.header("Server Configuration")
     st.session_state.server_ip = st.sidebar.text_input("Server IP Address", st.session_state.server_ip)
     
-    # Add a check to see if the client executable exists
+    # Verify client executable exists
     if not os.path.exists(CLIENT_EXECUTABLE):
-        st.sidebar.error(f"Client executable not found at:\n{CLIENT_EXECUTABLE}\nPlease update the path in the script.")
+        st.sidebar.error(f"Client executable not found at:\n{CLIENT_EXECUTABLE}")
     
-    # Robot control panel
+    # Control buttons
     st.header("Robot Control Panel")
-    
-    # Individual command buttons
-    st.subheader("Individual Commands")
     col1, col2, col3 = st.columns(3)
     
     with col1:
         if st.button("Spin 90°", disabled=st.session_state.executing):
-            # Create a thread to avoid blocking the UI
-            threading.Thread(
+            thread = threading.Thread(
                 target=execute_client_command,
                 args=("spin ninety",),
                 daemon=True
-            ).start()
+            )
+            add_script_run_ctx(thread)
+            thread.start()
     
     with col2:
         if st.button("Spin 180°", disabled=st.session_state.executing):
-            threading.Thread(
+            thread = threading.Thread(
                 target=execute_client_command,
                 args=("spin oneeighty",),
                 daemon=True
-            ).start()
+            )
+            add_script_run_ctx(thread)
+            thread.start()
     
     with col3:
         if st.button("Rest Position", disabled=st.session_state.executing):
-            threading.Thread(
+            thread = threading.Thread(
                 target=execute_client_command,
                 args=("rest",),
                 daemon=True
-            ).start()
+            )
+            add_script_run_ctx(thread)
+            thread.start()
     
-    # Status message
+    # Status display
     if st.session_state.status_message:
         st.info(st.session_state.status_message)
     
-    # Display execution status
     if st.session_state.executing:
         st.warning("Command in progress... Please wait.")
+        time.sleep(0.1)
+        st.rerun()
     
     # Command history
     st.header("Command History")
     if st.session_state.command_history:
-        history_df = st.dataframe(
-            st.session_state.command_history,
-            use_container_width=True
-        )
+        # Display more detailed history including outputs
+        for item in reversed(st.session_state.command_history):
+            with st.expander(f"{item['time']} - {item['command']} ({item['status']})"):
+                st.text(item.get('output', 'No output'))
     else:
         st.write("No commands executed yet.")
     
-    # Clear history button
     if st.button("Clear History"):
         st.session_state.command_history = []
+        st.rerun()
 
 if __name__ == "__main__":
     main()
