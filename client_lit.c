@@ -10,7 +10,7 @@
 
 #define I2C_DEVICE "/dev/i2c-1"
 #define ESP32_ADDR 0x08
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 4096
 
 /* Global variables */
 static SSL_CTX *ctx = NULL;
